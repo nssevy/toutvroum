@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="fr">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Toutvroum</title>
+		<link rel="stylesheet" href="style.css">
+	</head>
+	<body>
+		<div class="container">
+			<h1>Toutvroum 🛣️</h1>
+			<p class="subtitle">L'état des autoroutes IDF en temps réel</p>
+
+			<div class="boutons">
+				{% for autoroute in autoroutes %}
+					<button onclick="chercher('{{ autoroute }}')">
+						{{ autoroute == 'PERIPH' ? 'Périph' : autoroute }}
+					</button>
+				{% endfor %}
+			</div>
+
+			<div id="resultat" class="hidden"></div>
+		</div>
+
+		<script src="app.js"></script>
+	</body>
+</html>
