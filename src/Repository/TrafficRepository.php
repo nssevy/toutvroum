@@ -7,6 +7,9 @@ class TrafficRepository
     private string $apiKey;
     private string $bbox = '1.8,48.2,2.8,49.1';
 
+    // On ignore les fermetures démarrées il y a plus de X jours (données périmées)
+    private int $maxAgeJours = 7;
+
     private array $autoroutes = [
         'A1' => ['A1'],
         'A3' => ['A3'],
@@ -17,8 +20,25 @@ class TrafficRepository
         'A14' => ['A14'],
         'A86' => ['A86'],
         'A104' => ['A104'],
-        'PERIPH' => ['Boulevard Périphérique', 'Périphérique'],
+        // Vrai Périph parisien : signalé "Périphérique Intérieur/Extérieur".
+        // (le mot nu "Périphérique" attrape des voies locales type D84)
+        'PERIPH' => ['Périphérique Intérieur', 'Périphérique Extérieur'],
     ];
+
+    // Ville affichée sur les panneaux pour le sens "sortant" (loin de Paris).
+    // Les radiales ont 2 sens : vers Paris / vers cette ville.
+    private array $villesSortantes = [
+        'A1' => 'Lille',
+        'A3' => 'Lille',
+        'A4' => 'Metz–Nancy',
+        'A6' => 'Lyon',
+        'A10' => 'Bordeaux–Nantes',
+        'A13' => 'Rouen–Caen',
+        'A14' => 'Rouen',
+    ];
+
+    // Ancre Paris (lng, lat) pour déterminer le sens.
+    private array $paris = [2.3522, 48.8566];
 
     public function __construct(string $apiKey)
     {
@@ -40,7 +60,7 @@ class TrafficRepository
         $params = http_build_query([
             'key' => $this->apiKey,
             'bbox' => $this->bbox,
-            'fields' => '{incidents{type,properties{id,iconCategory,magnitudeOfDelay,events{description,code},startTime,endTime,from,to,roadNumbers}}}',
+            'fields' => '{incidents{type,geometry{type,coordinates},properties{id,iconCategory,magnitudeOfDelay,events{description,code},startTime,endTime,from,to,roadNumbers}}}',
             'language' => 'fr-FR',
             'timeValidityFilter' => 'present',
         ]);
@@ -61,14 +81,61 @@ class TrafficRepository
         return $this->filtrerParAutoroute($data['incidents'], $autoroute);
     }
 
-    // "A3 - A186 (D36BIS)" => ['A3', 'A186', 'D36BIS']
-    private function decouperEnMots(string $texte): array
+    // Fermeture démarrée dans les X derniers jours ?
+    private function estRecent(?string $startTime): bool
     {
-        $separateurs = ['-', '(', ')', ',', '/', '.'];
-        $normalise = str_replace($separateurs, ' ', $texte);
-        $tokens = explode(' ', $normalise);
+        if (!$startTime)
+            return false; // pas de date = on écarte (donnée douteuse)
 
-        return array_values(array_filter(array_map('trim', $tokens), fn($t) => $t !== ''));
+        $debut = strtotime($startTime);
+        if ($debut === false)
+            return false;
+
+        $limite = time() - ($this->maxAgeJours * 86400);
+        return $debut >= $limite;
+    }
+
+    // Déduit le sens de circulation à partir de la géométrie TomTom.
+    // Les coords sont ordonnées dans le sens de circulation (1er -> dernier point).
+    // Retourne "Paris", la ville sortante, ou null si indéterminable.
+    private function direction(string $autoroute, array $geometry): ?string
+    {
+        // Anneaux (A86, A104, Périph) : intérieur/extérieur, pas géré ici.
+        $villeSortante = $this->villesSortantes[$autoroute] ?? null;
+        if (!$villeSortante)
+            return null;
+
+        $points = $this->pointsLigne($geometry);
+        if (count($points) < 2)
+            return null;
+
+        $premier = $points[0];
+        $dernier = $points[count($points) - 1];
+
+        // Circulation va du premier vers le dernier point.
+        // Si on se rapproche de Paris -> sens Paris, sinon -> sens sortant.
+        return $this->distParis($dernier) < $this->distParis($premier)
+            ? 'Paris'
+            : $villeSortante;
+    }
+
+    // Extrait la liste de points [lng, lat] d'une geometry (LineString ou Point).
+    private function pointsLigne(array $geometry): array
+    {
+        $coords = $geometry['coordinates'] ?? [];
+        if (!$coords)
+            return [];
+
+        // LineString: [[lng,lat], ...]   Point: [lng,lat]
+        return is_array($coords[0]) ? $coords : [$coords];
+    }
+
+    // Distance² approx vers Paris (longitude pondérée par la latitude).
+    private function distParis(array $point): float
+    {
+        $dx = ($point[0] - $this->paris[0]) * cos(deg2rad($this->paris[1]));
+        $dy = $point[1] - $this->paris[1];
+        return $dx * $dx + $dy * $dy;
     }
 
     private function filtrerParAutoroute(array $incidents, string $autoroute): array
@@ -83,24 +150,23 @@ class TrafficRepository
             if ($gravite < 4)
                 continue;
 
+            // On écarte les fermetures périmées (vieux startTime)
+            $debut = $incident['properties']['startTime'] ?? null;
+            if (!$this->estRecent($debut))
+                continue;
+
             $roads = $incident['properties']['roadNumbers'] ?? [];
             $from = $incident['properties']['from'] ?? '';
             $to = $incident['properties']['to'] ?? '';
 
-            // Tous les "mots" du lieu : roadNumbers + from + to, en mots entiers
-            $tokens = array_merge(
-                $roads,
-                $this->decouperEnMots($from),
-                $this->decouperEnMots($to)
-            );
-
             foreach ($mots as $mot) {
-                // Code autoroute (A1, A86...) : doit apparaître comme mot entier.
-                // Nom (Périphérique...) : recherche texte simple.
+                // Code autoroute (A1, A86...) : la route DOIT être dans roadNumbers.
+                //   (sinon on attrape les D/N d'accès dont le from/to cite l'échangeur)
+                // Nom (Périphérique...) : pas de code dans roadNumbers -> match texte.
                 $estCode = $mot[0] === 'A' && ctype_digit(substr($mot, 1));
 
                 $match = $estCode
-                    ? in_array($mot, $tokens, true)
+                    ? in_array($mot, $roads, true)
                     : (str_contains($from, $mot) || str_contains($to, $mot));
 
                 if ($match) {
@@ -112,6 +178,7 @@ class TrafficRepository
                         'debut' => $incident['properties']['startTime'] ?? null,
                         'fin' => $incident['properties']['endTime'] ?? null,
                         'gravite' => $gravite,
+                        'direction' => $this->direction($autoroute, $incident['geometry'] ?? []),
                     ];
                     break;
                 }

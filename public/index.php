@@ -2,9 +2,12 @@
 require_once __DIR__ . '/../config/bootstrap.php';
 
 use App\Repository\TrafficRepository;
+use App\Repository\DatexRepository;
 
-$apiKey = $_ENV['TOMTOM_API_KEY'];
-$repository = new TrafficRepository($apiKey);
+// TomTom : seulement pour le Périph (absent du flux DiRIF).
+// DATEX DiRIF : source officielle pour les autoroutes.
+$tomtom = new TrafficRepository($_ENV['TOMTOM_API_KEY']);
+$datex = new DatexRepository();
 
 // Si c'est un appel API (AJAX)
 if (isset($_GET['autoroute'])) {
@@ -12,6 +15,7 @@ if (isset($_GET['autoroute'])) {
     header('Access-Control-Allow-Origin: *');
 
     $autoroute = strtoupper(trim($_GET['autoroute']));
+    $repository = $autoroute === 'PERIPH' ? $tomtom : $datex;
 
     if (!$repository->isValidAutoroute($autoroute)) {
         echo json_encode(['error' => 'Autoroute non reconnue']);
@@ -23,6 +27,7 @@ if (isset($_GET['autoroute'])) {
 }
 
 // Sinon on affiche la page ($twig vient de bootstrap.php)
+// La liste complète (avec Périph) vient de TomTom.
 echo $twig->render('home.html.twig', [
-    'autoroutes' => $repository->getAutoroutes(),
+    'autoroutes' => $tomtom->getAutoroutes(),
 ]);

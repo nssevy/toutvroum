@@ -57,9 +57,7 @@ function afficher(data) {
   } else {
     html = `<div class="statut ferme">🚫 ${cap(
       nom
-    )} ${fermee} — ${n} tronçon${n > 1 ? "s" : ""} bloqué${
-      n > 1 ? "s" : ""
-    }</div>`;
+    )} ${fermee} — ${n} fermeture${n > 1 ? "s" : ""}</div>`;
 
     html += '<div class="incidents">';
     data.incidents.forEach((inc) => {
@@ -77,9 +75,15 @@ function afficher(data) {
           ? `au niveau de ${from || to}`
           : "";
 
+      // Direction = info prioritaire (le sens qui concerne l'usager)
+      const titre = inc.direction
+        ? `🚫 direction ${inc.direction}`
+        : "🚫 Fermeture";
+
       html += `
                 <div class="incident">
-                    <p>🚧 Tronçon ${fermee} ${trajet}.</p>
+                    <p class="incident-titre">${titre}</p>
+                    ${trajet ? `<p>${cap(trajet)}</p>` : ""}
                     <p class="incident-meta">Fermé depuis le ${debut} — ${fin}.</p>
                 </div>
             `;
