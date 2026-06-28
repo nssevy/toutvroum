@@ -95,6 +95,13 @@ class DatexRepository
                 continue;
             }
 
+            // 2bis. Vraie fermeture ? DiRIF tague parfois "roadClosed" alors qu'une
+            // seule voie est touchée (lane1/3). Si des voies précises sont listées
+            // et qu'elles sont moins nombreuses que le total -> fermeture de voie, pas de route.
+            if (!$this->toutesVoiesBloquees($xp, $rec)) {
+                continue;
+            }
+
             // 3. Route = l'autoroute demandée (A0006A -> A6)
             $route = $this->normaliserRoute($this->texte($xp, $rec, ".//*[local-name()='roadNumber']"));
             if ($route !== $autoroute) {
@@ -147,6 +154,27 @@ class DatexRepository
             return $t === '' ? null : $t;
         }
         return null;
+    }
+
+    // Vraie fermeture de route = toutes les voies bloquées (ou aucune voie précise listée).
+    // Si N voies précises sont listées et N < nombre total -> simple fermeture de voie.
+    private function toutesVoiesBloquees(DOMXPath $xp, DOMNode $rec): bool
+    {
+        $voies = $xp->query(".//*[local-name()='affectedCarriagewayAndLanes']//*[local-name()='lane']", $rec);
+        $nbVoies = $voies ? $voies->length : 0;
+
+        // Aucune voie précise listée -> on considère la chaussée fermée.
+        if ($nbVoies === 0) {
+            return true;
+        }
+
+        $total = $this->texte($xp, $rec, ".//*[local-name()='originalNumberOfLanes']");
+        // Total inconnu : prudence, on garde (mieux vaut un faux positif rare qu'un manque).
+        if ($total === null) {
+            return true;
+        }
+
+        return $nbVoies >= (int) $total;
     }
 
     // $a est-il antérieur à $b ? (null = inconnu, traité comme le plus ancien)
