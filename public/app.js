@@ -75,10 +75,8 @@ function afficher(data) {
           ? `au niveau de ${from || to}`
           : "";
 
-      // Direction = info prioritaire (le sens qui concerne l'usager)
-      const titre = inc.direction
-        ? `🚫 direction ${inc.direction}`
-        : "🚫 Fermeture";
+      // Direction = info prioritaire (trajet A → B de la chaussée fermée)
+      const titre = inc.direction ? `🚫 ${inc.direction}` : "🚫 Fermeture";
 
       html += `
                 <div class="incident">

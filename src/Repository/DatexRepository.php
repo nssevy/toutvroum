@@ -210,16 +210,24 @@ class DatexRepository
         return $this->texte($xp, $rec, $q);
     }
 
-    // "De Wissous (A6) vers Paris - Porte d'Orléans" -> "Paris - Porte d'Orléans"
+    // "De Wissous (A6) vers Paris - Porte d'Orléans" -> "Wissous → Paris - Porte d'Orléans"
     private function directionTexte(DOMXPath $xp, DOMNode $rec): ?string
     {
         $vals = $xp->query(".//*[local-name()='generalPublicComment']//*[local-name()='value']", $rec);
         foreach ($vals as $v) {
             $t = trim($v->textContent);
-            if (stripos($t, 'De ') === 0 && preg_match('/\svers\s+(.+)$/iu', $t, $m)) {
-                return trim($m[1]);
+            if (stripos($t, 'De ') === 0 && preg_match('/^De\s+(.+?)\s+vers\s+(.+)$/iu', $t, $m)) {
+                $origine = $this->nettoyer($m[1]);
+                $destination = $this->nettoyer($m[2]);
+                return "{$origine} → {$destination}";
             }
         }
         return null;
+    }
+
+    // Retire les annotations entre parenthèses : "Wissous (A6)" -> "Wissous"
+    private function nettoyer(string $lieu): string
+    {
+        return trim(preg_replace('/\s*\([^)]*\)/', '', $lieu));
     }
 }
