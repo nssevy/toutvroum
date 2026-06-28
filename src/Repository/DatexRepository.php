@@ -107,16 +107,29 @@ class DatexRepository
                 continue;
             }
 
-            $fermetures[] = [
+            $debut = $this->texte($xp, $rec, ".//*[local-name()='overallStartTime']");
+
+            // 5. Dédoublonnage : une opération DiRIF est publiée en plusieurs
+            // sous-records ("260628-001316-1", "-102"...). Même base = même fermeture.
+            $cle = preg_replace('/-\d+$/', '', $rec->getAttribute('id'));
+
+            $fermeture = [
                 'description' => 'Route fermée',
                 'from' => $this->ville($xp, $rec) ?? '',
                 'to' => '',
-                'debut' => $this->texte($xp, $rec, ".//*[local-name()='overallStartTime']"),
+                'debut' => $debut,
                 'fin' => $fin,
                 'gravite' => 4,
                 'direction' => $this->directionTexte($xp, $rec),
             ];
+
+            // On garde la version au début le plus ancien (fermé "depuis" correct).
+            if (!isset($fermetures[$cle]) || $this->avant($debut, $fermetures[$cle]['debut'])) {
+                $fermetures[$cle] = $fermeture;
+            }
         }
+
+        $fermetures = array_values($fermetures);
 
         return [
             'autoroute' => $autoroute,
@@ -134,6 +147,18 @@ class DatexRepository
             return $t === '' ? null : $t;
         }
         return null;
+    }
+
+    // $a est-il antérieur à $b ? (null = inconnu, traité comme le plus ancien)
+    private function avant(?string $a, ?string $b): bool
+    {
+        if ($a === null) {
+            return true;
+        }
+        if ($b === null) {
+            return false;
+        }
+        return strtotime($a) < strtotime($b);
     }
 
     // "A0006A" -> "A6"  |  "A0086" -> "A86"  |  "A0104" -> "A104"
