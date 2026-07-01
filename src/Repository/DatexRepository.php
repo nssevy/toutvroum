@@ -8,8 +8,13 @@ use DOMXPath;
 
 /**
  * Source officielle DiRIF (DATEX II, open data Bison Futé).
- * Fermetures temps réel des autoroutes d'Île-de-France.
+ * Fermetures + perturbations temps réel des autoroutes d'Île-de-France.
  * Le Périph n'y est PAS (géré par la Ville de Paris) -> voir TrafficRepository.
+ *
+ * 3 états par autoroute :
+ *   - ferme    : fermeture totale de la voie principale (gravité 4)
+ *   - perturbe : voie(s) fermée(s), travaux, accident, obstacle, bretelle fermée (gravité 2)
+ *   - libre    : rien d'actif
  */
 class DatexRepository
 {
@@ -18,6 +23,20 @@ class DatexRepository
     private int $cacheTtl = 600; // 10 min (le flux est mis à jour chaque heure)
 
     private array $autoroutes = ['A1', 'A3', 'A4', 'A6', 'A10', 'A13', 'A14', 'A86', 'A104'];
+
+    // Terminus par autoroute et par sens (fallback quand DiRIF n'écrit pas "De X vers Y").
+    // Radiales = cardinal ; rocades A86/A104 = intérieur/extérieur.
+    private array $termini = [
+        'A1'   => ['northBound' => 'Lille',   'southBound' => 'Paris'],
+        'A3'   => ['northBound' => 'Roissy',  'southBound' => 'Paris'],
+        'A4'   => ['eastBound' => 'Metz',     'westBound'  => 'Paris'],
+        'A6'   => ['southBound' => 'Lyon',    'northBound' => 'Paris'],
+        'A10'  => ['southBound' => 'Bordeaux', 'northBound' => 'Paris'],
+        'A13'  => ['westBound' => 'Caen',     'eastBound'  => 'Paris'],
+        'A14'  => ['westBound' => 'Orgeval',  'eastBound'  => 'La Défense'],
+        'A86'  => ['innerRing' => 'intérieur', 'outerRing' => 'extérieur'],
+        'A104' => ['northBound' => 'Roissy',  'southBound' => 'A5-A6', 'innerRing' => 'intérieur', 'outerRing' => 'extérieur'],
+    ];
 
     public function __construct()
     {
@@ -81,7 +100,12 @@ class DatexRepository
         // local-name() : on ignore les namespaces (soap, datex2, xsi)
         $records = $xp->query("//*[local-name()='situationRecord']");
 
-        $fermetures = [];
+        // Un incident par baseId (l'id sans le suffixe -N). Une même opération DiRIF
+        // est publiée en plusieurs sous-records, parfois sous des types différents
+        // (chantier = MaintenanceWorks + RoadOrCarriagewayOrLaneManagement). On garde
+        // le plus grave par baseId.
+        $incidents = [];
+
         foreach ($records as $rec) {
             // 1. Source = DiRIF uniquement
             $src = $this->texte($xp, $rec, ".//*[local-name()='sourceIdentification']");
@@ -89,61 +113,177 @@ class DatexRepository
                 continue;
             }
 
-            // 2. Type = fermeture (pas un simple rétrécissement de voie)
-            $type = $this->texte($xp, $rec, ".//*[local-name()='roadOrCarriagewayOrLaneManagementType']");
-            if (!in_array($type, ['roadClosed', 'carriagewayClosed'], true)) {
+            // 2. Actif ? (pas un événement prévu/à-risque, déjà commencé, pas terminé)
+            if (!$this->estActif($xp, $rec)) {
                 continue;
             }
 
-            // 2bis. Vraie fermeture ? DiRIF tague parfois "roadClosed" alors qu'une
-            // seule voie est touchée (lane1/3). Si des voies précises sont listées
-            // et qu'elles sont moins nombreuses que le total -> fermeture de voie, pas de route.
-            if (!$this->toutesVoiesBloquees($xp, $rec)) {
+            // 2bis. Véhicule/incident hors voie de circulation (sur BAU) -> ne bloque rien.
+            if ($this->horsCirculation($xp, $rec)) {
                 continue;
             }
 
-            // 3. Route = l'autoroute demandée (A0006A -> A6)
-            $route = $this->normaliserRoute($this->texte($xp, $rec, ".//*[local-name()='roadNumber']"));
-            if ($route !== $autoroute) {
+            // 3. Route = l'autoroute demandée (roadNumber "A0006A", roadName/linkName "A6")
+            if (!$this->routeCorrespond($xp, $rec, $autoroute)) {
                 continue;
             }
 
-            // 4. Fermeture déjà terminée ? (le flux est curaté, on fait juste confiance à la validité)
-            $fin = $this->texte($xp, $rec, ".//*[local-name()='overallEndTime']");
-            if ($fin !== null && strtotime($fin) < time()) {
+            // 4. Classement : gravité + cause. null = type ignoré.
+            $classe = $this->classer($xp, $rec);
+            if ($classe === null) {
                 continue;
             }
 
-            $debut = $this->texte($xp, $rec, ".//*[local-name()='overallStartTime']");
-
-            // 5. Dédoublonnage : une opération DiRIF est publiée en plusieurs
-            // sous-records ("260628-001316-1", "-102"...). Même base = même fermeture.
-            $cle = preg_replace('/-\d+$/', '', $rec->getAttribute('id'));
-
-            $fermeture = [
-                'description' => 'Route fermée',
-                'from' => $this->ville($xp, $rec) ?? '',
-                'to' => '',
-                'debut' => $debut,
-                'fin' => $fin,
-                'gravite' => 4,
-                'direction' => $this->directionTexte($xp, $rec),
+            $incident = [
+                'description' => $classe['cause'],
+                'gravite'     => $classe['gravite'],
+                'from'        => $this->ville($xp, $rec) ?? '',
+                'to'          => '',
+                'direction'   => $this->directionTexte($xp, $rec, $autoroute),
+                'debut'       => $this->texte($xp, $rec, ".//*[local-name()='overallStartTime']"),
+                'fin'         => $this->texte($xp, $rec, ".//*[local-name()='overallEndTime']"),
             ];
 
-            // On garde la version au début le plus ancien (fermé "depuis" correct).
-            if (!isset($fermetures[$cle]) || $this->avant($debut, $fermetures[$cle]['debut'])) {
-                $fermetures[$cle] = $fermeture;
+            $cle = preg_replace('/-\d+$/', '', $rec->getAttribute('id'));
+
+            // Garde le plus grave ; à gravité égale, le début le plus ancien.
+            if (!isset($incidents[$cle])
+                || $incident['gravite'] > $incidents[$cle]['gravite']
+                || ($incident['gravite'] === $incidents[$cle]['gravite']
+                    && $this->avant($incident['debut'], $incidents[$cle]['debut']))
+            ) {
+                $incidents[$cle] = $incident;
             }
         }
 
-        $fermetures = array_values($fermetures);
+        $incidents = array_values($incidents);
+
+        // Statut = pire gravité présente.
+        $gravMax = 0;
+        foreach ($incidents as $i) {
+            $gravMax = max($gravMax, $i['gravite']);
+        }
+        $statut = $gravMax >= 4 ? 'ferme' : ($gravMax > 0 ? 'perturbe' : 'libre');
 
         return [
             'autoroute' => $autoroute,
-            'statut' => count($fermetures) > 0 ? 'ferme' : 'libre',
-            'incidents' => $fermetures,
-            'total' => count($fermetures),
+            'statut'    => $statut,
+            'incidents' => $incidents,
+            'total'     => count($incidents),
         ];
+    }
+
+    // --- Classement : rend ['gravite' => int, 'cause' => string] ou null si ignoré ---
+    private function classer(DOMXPath $xp, DOMNode $rec): ?array
+    {
+        $xsi = $this->xsiType($rec);
+
+        // Travaux / accidents / obstacles = perturbation (gravité 2).
+        switch ($xsi) {
+            case 'MaintenanceWorks':
+            case 'ConstructionWorks':
+                return ['gravite' => 2, 'cause' => 'Travaux'];
+            case 'Accident':
+                return ['gravite' => 2, 'cause' => 'Accident'];
+            case 'VehicleObstruction':
+                return ['gravite' => 2, 'cause' => 'Véhicule arrêté'];
+            case 'GeneralObstruction':
+                return ['gravite' => 2, 'cause' => 'Obstacle sur la voie'];
+            case 'RoadOrCarriagewayOrLaneManagement':
+                return $this->classerGestion($xp, $rec);
+        }
+
+        // Ignorés : SpeedManagement, ReroutingManagement, GeneralNetworkManagement,
+        // GeneralInstructionOrMessageToRoadUsers, etc.
+        return null;
+    }
+
+    // Gestion de voie/chaussée : fermeture totale, bretelle, ou voie(s).
+    private function classerGestion(DOMXPath $xp, DOMNode $rec): ?array
+    {
+        $type = $this->texte($xp, $rec, ".//*[local-name()='roadOrCarriagewayOrLaneManagementType']");
+        $fermeture = in_array($type, ['roadClosed', 'carriagewayClosed'], true);
+
+        // Bretelle (entrée/sortie) : la voie principale roule -> perturbation, jamais fermée.
+        if ($this->estBretelle($xp, $rec)) {
+            return ['gravite' => 2, 'cause' => 'Bretelle fermée'];
+        }
+
+        if ($fermeture && $this->toutesVoiesBloquees($xp, $rec)) {
+            return ['gravite' => 4, 'cause' => 'Route fermée'];
+        }
+
+        // Fermeture partielle / laneClosures / narrowLanes -> voie(s).
+        $voies = $this->libelleVoies($xp, $rec);
+        if ($type === 'narrowLanes') {
+            return ['gravite' => 2, 'cause' => $voies ? "Voie rétrécie ($voies)" : 'Voie rétrécie'];
+        }
+        if ($fermeture || $type === 'laneClosures' || $voies !== '') {
+            if ($voies === '') {
+                return ['gravite' => 2, 'cause' => 'Voie fermée'];
+            }
+            // Accord : "Voies 1 et 2 fermées" / "Voie 1 fermée" / "BAU fermée"
+            $accord = str_starts_with($voies, 'Voies') ? 'fermées' : 'fermée';
+            return ['gravite' => 2, 'cause' => "$voies $accord"];
+        }
+
+        return null;
+    }
+
+    // Incident signalé "hors voie de circulation" (véhicule sur BAU) : ne bloque pas.
+    private function horsCirculation(DOMXPath $xp, DOMNode $rec): bool
+    {
+        $vals = $xp->query(".//*[local-name()='generalPublicComment']//*[local-name()='value']", $rec);
+        foreach ($vals as $v) {
+            if (stripos($v->textContent, 'hors voie de circulation') !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // --- Actif = certain (pas riskOf), commencé, pas terminé ---
+    private function estActif(DOMXPath $xp, DOMNode $rec): bool
+    {
+        $prob = $this->texte($xp, $rec, ".//*[local-name()='probabilityOfOccurrence']");
+        if ($prob === 'riskOf') {
+            return false;
+        }
+        $debut = $this->texte($xp, $rec, ".//*[local-name()='overallStartTime']");
+        if ($debut !== null && strtotime($debut) > time()) {
+            return false;
+        }
+        $fin = $this->texte($xp, $rec, ".//*[local-name()='overallEndTime']");
+        if ($fin !== null && strtotime($fin) < time()) {
+            return false;
+        }
+        return true;
+    }
+
+    // --- La route du record correspond-elle à l'autoroute demandée ? ---
+    // DiRIF IDF ne remplit pas roadNumber : on cherche aussi roadName et linkName.
+    private function routeCorrespond(DOMXPath $xp, DOMNode $rec, string $autoroute): bool
+    {
+        $candidats = [];
+
+        $rn = $this->normaliserRoute($this->texte($xp, $rec, ".//*[local-name()='roadNumber']"));
+        if ($rn !== null) {
+            $candidats[] = $rn;
+        }
+
+        $noms = $xp->query(
+            ".//*[local-name()='roadName']//*[local-name()='value']"
+            . " | .//*[local-name()='name'][.//*[local-name()='tpegOtherPointDescriptorType'][text()='linkName']]//*[local-name()='value']",
+            $rec
+        );
+        foreach ($noms as $n) {
+            $norm = $this->normaliserRoute(trim($n->textContent));
+            if ($norm !== null) {
+                $candidats[] = $norm;
+            }
+        }
+
+        return in_array($autoroute, $candidats, true);
     }
 
     private function texte(DOMXPath $xp, DOMNode $ctx, string $query): ?string
@@ -156,25 +296,95 @@ class DatexRepository
         return null;
     }
 
+    // xsi:type du record ("ns2:MaintenanceWorks" -> "MaintenanceWorks")
+    private function xsiType(DOMNode $rec): string
+    {
+        $t = '';
+        if ($rec->attributes !== null) {
+            $attr = $rec->attributes->getNamedItemNS('http://www.w3.org/2001/XMLSchema-instance', 'type');
+            $t = $attr ? $attr->nodeValue : '';
+        }
+        return preg_replace('/^[^:]+:/', '', $t);
+    }
+
+    // Bretelle = chaussée touchée uniquement entrée/sortie (pas la voie principale).
+    private function estBretelle(DOMXPath $xp, DOMNode $rec): bool
+    {
+        $carr = $xp->query(".//*[local-name()='carriageway']", $rec);
+        if (!$carr || $carr->length === 0) {
+            return false;
+        }
+        $slip = false;
+        foreach ($carr as $c) {
+            $v = trim($c->textContent);
+            if ($v === 'mainCarriageway') {
+                return false; // voie principale touchée -> pas qu'une bretelle
+            }
+            if (in_array($v, ['entrySlipRoad', 'exitSlipRoad'], true)) {
+                $slip = true;
+            }
+        }
+        return $slip;
+    }
+
     // Vraie fermeture de route = toutes les voies bloquées (ou aucune voie précise listée).
-    // Si N voies précises sont listées et N < nombre total -> simple fermeture de voie.
     private function toutesVoiesBloquees(DOMXPath $xp, DOMNode $rec): bool
     {
         $voies = $xp->query(".//*[local-name()='affectedCarriagewayAndLanes']//*[local-name()='lane']", $rec);
-        $nbVoies = $voies ? $voies->length : 0;
+        $tokens = [];
+        foreach ($voies as $v) {
+            $tokens[] = trim($v->textContent);
+        }
 
-        // Aucune voie précise listée -> on considère la chaussée fermée.
-        if ($nbVoies === 0) {
+        // Aucune voie précise listée -> chaussée entière fermée.
+        if (count($tokens) === 0) {
+            return true;
+        }
+        // Marqueur explicite "toutes voies".
+        if (in_array('allLanesCompleteCarriageway', $tokens, true)) {
             return true;
         }
 
         $total = $this->texte($xp, $rec, ".//*[local-name()='originalNumberOfLanes']");
-        // Total inconnu : prudence, on garde (mieux vaut un faux positif rare qu'un manque).
         if ($total === null) {
-            return true;
+            return true; // total inconnu : prudence, on considère fermée
         }
 
-        return $nbVoies >= (int) $total;
+        // BAU (hardShoulder) n'est pas une voie de circulation : ne compte pas.
+        $vraiesVoies = array_filter($tokens, fn($t) => $t !== 'hardShoulder');
+        return count($vraiesVoies) >= (int) $total;
+    }
+
+    // "lane1,hardShoulder" -> "Voie 1 et BAU"  |  "lane1,lane2" -> "Voies 1 et 2"
+    private function libelleVoies(DOMXPath $xp, DOMNode $rec): string
+    {
+        $voies = $xp->query(".//*[local-name()='affectedCarriagewayAndLanes']//*[local-name()='lane']", $rec);
+        $labels = [];
+        foreach ($voies as $v) {
+            $t = trim($v->textContent);
+            if ($t === 'allLanesCompleteCarriageway') {
+                continue;
+            }
+            if ($t === 'hardShoulder') {
+                $labels[] = 'BAU';
+            } elseif (preg_match('/^lane(\d+)$/', $t, $m)) {
+                $labels[] = 'voie ' . $m[1];
+            }
+        }
+        $labels = array_values(array_unique($labels));
+
+        if (count($labels) === 0) {
+            return '';
+        }
+        // Majuscule sur le premier mot, accord pluriel.
+        $prefixe = count($labels) > 1 ? 'Voies' : 'Voie';
+        $liste = array_map(fn($l) => preg_replace('/^voie /', '', $l), $labels);
+        // "Voies 1 et 2" / "Voies 1, 2 et 3" / "Voie 1" / "BAU"
+        if ($labels[0] === 'BAU' && count($labels) === 1) {
+            return 'BAU';
+        }
+        $dernier = array_pop($liste);
+        return $prefixe . ' ' . (count($liste) ? implode(', ', $liste) . ' et ' . $dernier : $dernier);
     }
 
     // $a est-il antérieur à $b ? (null = inconnu, traité comme le plus ancien)
@@ -189,13 +399,13 @@ class DatexRepository
         return strtotime($a) < strtotime($b);
     }
 
-    // "A0006A" -> "A6"  |  "A0086" -> "A86"  |  "A0104" -> "A104"
+    // "A0006A" -> "A6"  |  "A0086" -> "A86"  |  "A6" -> "A6"  |  "N118" -> "N118"
     private function normaliserRoute(?string $roadNumber): ?string
     {
         if ($roadNumber === null) {
             return null;
         }
-        if (preg_match('/^([A-Z])0*(\d+)[A-Z]?$/', $roadNumber, $m)) {
+        if (preg_match('/^([A-Z])0*(\d+)[A-Z]?$/', trim($roadNumber), $m)) {
             return $m[1] . $m[2];
         }
         return null;
@@ -210,19 +420,40 @@ class DatexRepository
         return $this->texte($xp, $rec, $q);
     }
 
-    // "De Wissous (A6) vers Paris - Porte d'Orléans" -> "Wissous → Paris - Porte d'Orléans"
-    private function directionTexte(DOMXPath $xp, DOMNode $rec): ?string
+    // Sens de circulation. Cascade pour toujours donner un sens exploitable :
+    //  1. "De X vers Y" (texte DiRIF, le plus précis)  -> "X → Y"
+    //  2. tpegDirection + terminus de l'autoroute       -> "vers Bordeaux"
+    //  3. innerRing/outerRing (rocades)                 -> "sens intérieur/extérieur"
+    //  4. bothWays                                      -> "les deux sens"
+    private function directionTexte(DOMXPath $xp, DOMNode $rec, string $autoroute): ?string
     {
+        // 1. Texte explicite "De X vers Y"
         $vals = $xp->query(".//*[local-name()='generalPublicComment']//*[local-name()='value']", $rec);
         foreach ($vals as $v) {
             $t = trim($v->textContent);
             if (stripos($t, 'De ') === 0 && preg_match('/^De\s+(.+?)\s+vers\s+(.+)$/iu', $t, $m)) {
-                $origine = $this->nettoyer($m[1]);
-                $destination = $this->nettoyer($m[2]);
-                return "{$origine} → {$destination}";
+                return $this->nettoyer($m[1]) . ' → ' . $this->nettoyer($m[2]);
             }
         }
-        return null;
+
+        // 2-4. Fallback via tpegDirection
+        $card = $this->texte($xp, $rec, ".//*[local-name()='tpegDirection']");
+        if ($card === null) {
+            return null;
+        }
+        if ($card === 'bothWays') {
+            return 'les deux sens';
+        }
+
+        $dest = $this->termini[$autoroute][$card] ?? null;
+        if ($dest !== null) {
+            // "intérieur"/"extérieur" -> "sens intérieur" ; ville -> "vers Bordeaux"
+            return in_array($dest, ['intérieur', 'extérieur'], true) ? "sens $dest" : "vers $dest";
+        }
+
+        // Dernier recours : cardinal générique.
+        $cardinaux = ['northBound' => 'le nord', 'southBound' => 'le sud', 'eastBound' => "l'est", 'westBound' => "l'ouest"];
+        return isset($cardinaux[$card]) ? 'vers ' . $cardinaux[$card] : null;
     }
 
     // Retire les annotations entre parenthèses : "Wissous (A6)" -> "Wissous"

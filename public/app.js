@@ -45,44 +45,59 @@ function afficher(data) {
   // "A3" -> "l'A3" / "PERIPH" -> "le Périph"
   const nom = data.autoroute === "PERIPH" ? "le Périph" : `l'${data.autoroute}`;
   const masculin = data.autoroute === "PERIPH";
-  const fermee = masculin ? "fermé" : "fermée";
+  const e = masculin ? "" : "e";
 
   let html;
-  const n = data.incidents.length;
+  const statut = data.statut;
 
-  if (n === 0) {
-    html = `<div class="statut libre">✅ ${cap(nom)} est dégagé${
-      masculin ? "" : "e"
-    }, aucune fermeture signalée.</div>`;
-  } else {
-    html = `<div class="statut ferme">🚫 ${cap(
+  if (statut === "libre") {
+    html = `<div class="statut libre">✅ ${cap(
       nom
-    )} ${fermee} — ${n} fermeture${n > 1 ? "s" : ""}</div>`;
+    )} est dégagé${e}, aucune perturbation signalée.</div>`;
+  } else {
+    const nbFerme = data.incidents.filter((i) => i.gravite >= 4).length;
+    const n = data.incidents.length;
+
+    if (statut === "ferme") {
+      html = `<div class="statut ferme">🔴 ${cap(
+        nom
+      )} fermé${e} — ${nbFerme} fermeture${nbFerme > 1 ? "s" : ""}</div>`;
+    } else {
+      html = `<div class="statut perturbe">🟠 ${cap(
+        nom
+      )} perturbé${e} — ${n} incident${n > 1 ? "s" : ""}</div>`;
+    }
 
     html += '<div class="incidents">';
     data.incidents.forEach((inc) => {
       const from = nettoyerLieu(inc.from);
-      const to = nettoyerLieu(inc.to);
-      const debut = formatDate(inc.debut);
-      const fin = inc.fin
-        ? `réouverture prévue le ${formatDate(inc.fin)}`
-        : "réouverture non communiquée";
+      const ferme = inc.gravite >= 4;
+      const pastille = ferme ? "🔴" : "🟠";
 
-      const trajet =
-        from && to && from !== to
-          ? `entre ${from} et ${to}`
-          : from || to
-          ? `au niveau de ${from || to}`
-          : "";
+      // Titre = cause (Route fermée / Accident / Voie 1 fermée...) + direction si connue
+      const cause = inc.description || "Perturbation";
+      const titre = inc.direction
+        ? `${pastille} ${cause} — ${inc.direction}`
+        : `${pastille} ${cause}`;
 
-      // Direction = info prioritaire (trajet A → B de la chaussée fermée)
-      const titre = inc.direction ? `🚫 ${inc.direction}` : "🚫 Fermeture";
+      const trajet = from ? `Au niveau de ${from}` : "";
+
+      const depuis = formatDate(inc.debut);
+      let meta;
+      if (ferme) {
+        const fin = inc.fin
+          ? `réouverture prévue le ${formatDate(inc.fin)}`
+          : "réouverture non communiquée";
+        meta = `Fermé depuis le ${depuis} — ${fin}.`;
+      } else {
+        meta = `Signalé depuis le ${depuis}.`;
+      }
 
       html += `
                 <div class="incident">
                     <p class="incident-titre">${titre}</p>
-                    ${trajet ? `<p>${cap(trajet)}</p>` : ""}
-                    <p class="incident-meta">Fermé depuis le ${debut} — ${fin}.</p>
+                    ${trajet ? `<p>${trajet}</p>` : ""}
+                    <p class="incident-meta">${meta}</p>
                 </div>
             `;
     });
