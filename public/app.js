@@ -93,7 +93,7 @@ function charger(autoroute) {
     .then((data) => afficherDetail(autoroute, data))
     .catch(() => {
       app.innerHTML = `
-        ${StatusBar()}${NavBar()}
+        ${NavBar()}
         <div class="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-20 text-center">
           <p class="text-[20px] text-texte">Erreur de connexion.</p>
           <p class="text-sm text-muted">On réessaie dans 5 minutes.</p>
@@ -105,7 +105,7 @@ function charger(autoroute) {
 function afficherDetail(autoroute, data) {
   if (data.error) {
     app.innerHTML = `
-      ${StatusBar()}${NavBar()}
+      ${NavBar()}
       <div class="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-20 text-center">
         <p class="text-[20px] text-texte">${escapeHtml(data.error)}</p>
         <button data-nav="back" class="text-sm text-muted hover:text-texte">Retour</button>
@@ -119,7 +119,7 @@ function afficherDetail(autoroute, data) {
   // --- Dégagé ---
   if (data.statut === "libre") {
     app.innerHTML = `
-      ${StatusBar()}${NavBar()}
+      ${NavBar()}
       <div class="flex flex-1 flex-col items-center px-5">
         <div class="flex flex-col items-center gap-2 py-10">
           ${AutorouteTitre(nom)}
@@ -145,7 +145,7 @@ function afficherDetail(autoroute, data) {
   );
 
   app.innerHTML = `
-    ${StatusBar()}${NavBar()}
+    ${NavBar()}
     <div class="flex flex-1 flex-col px-5">
       <div class="flex flex-col items-center gap-2 py-8">
         ${AutorouteTitre(nom)}
