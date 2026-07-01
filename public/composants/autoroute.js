@@ -3,7 +3,7 @@ import { escapeHtml } from "./util.js";
 // Badge autoroute carré (grille de choix). Cliquable -> ouvre le détail.
 export function AutorouteBadge(nom) {
   return `
-    <button data-autoroute="${escapeHtml(nom)}" class="flex h-[78px] items-center justify-center bg-carte text-[28px] font-bold text-texte transition-colors hover:bg-carte/70">
+    <button data-autoroute="${escapeHtml(nom)}" class="flex h-[78px] items-center justify-center border border-bordure bg-carte text-[28px] font-bold text-texte transition-colors hover:bg-carte/70">
       ${escapeHtml(nom)}
     </button>`;
 }
