@@ -1,18 +1,4 @@
-// Barre de statut iOS (mock), barre de navigation, pied de page.
-
-export function StatusBar() {
-  return `
-    <div class="flex h-[50px] items-center justify-between px-6 text-sm text-texte">
-      <span class="font-semibold">10:28</span>
-      <div class="flex items-center gap-1.5">
-        <span aria-hidden="true">▂▄▆</span>
-        <span aria-hidden="true">􀙇</span>
-        <span class="inline-block h-[11px] w-[22px] rounded-[3px] border border-texte/60 p-[1px]">
-          <span class="block h-full w-full rounded-[1px] bg-texte"></span>
-        </span>
-      </div>
-    </div>`;
-}
+// Barre de navigation, pied de page.
 
 export function NavBar() {
   return `

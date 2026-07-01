@@ -1,5 +1,5 @@
 import { escapeHtml, cap, nettoyerLieu } from "./composants/util.js";
-import { StatusBar, NavBar, Footer, BackData } from "./composants/chrome.js";
+import { NavBar, Footer, BackData } from "./composants/chrome.js";
 import { Badge } from "./composants/badge.js";
 import { Direction } from "./composants/direction.js";
 import { Position } from "./composants/position.js";
@@ -43,8 +43,7 @@ function rendre(vue, params) {
 // --- Écran Accueil ---
 function viewAccueil() {
   app.innerHTML = `
-    ${StatusBar()}
-    ${NavBar()}
+        ${NavBar()}
     <div class="flex flex-1 flex-col px-5">
       <header class="flex flex-col gap-4 py-6">
         <h1 class="text-[32px] font-bold leading-tight text-texte">Ta route est-elle ouverte, ou c'est mort ?</h1>
@@ -62,8 +61,7 @@ function viewAccueil() {
 function viewChoix() {
   const grille = AUTOROUTES.map(AutorouteBadge).join("");
   app.innerHTML = `
-    ${StatusBar()}
-    ${NavBar()}
+        ${NavBar()}
     <div class="flex flex-1 flex-col px-5">
       <header class="flex flex-col gap-4 py-6">
         <h1 class="text-[32px] font-bold leading-tight text-texte">Choisis ton autoroute.</h1>
@@ -79,8 +77,7 @@ function viewChoix() {
 // --- Écran Détail (async) ---
 function viewDetail(autoroute) {
   app.innerHTML = `
-    ${StatusBar()}
-    ${NavBar()}
+        ${NavBar()}
     <div class="flex flex-1 items-center justify-center py-20">
       <span class="text-muted">Chargement…</span>
     </div>`;
