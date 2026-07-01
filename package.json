@@ -1,0 +1,13 @@
+{
+  "name": "toutvroum",
+  "version": "1.0.0",
+  "private": true,
+  "description": "État des autoroutes IDF en temps réel",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/tailwind.css -o ./public/style.css --minify",
+    "watch:css": "tailwindcss -i ./src/tailwind.css -o ./public/style.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}

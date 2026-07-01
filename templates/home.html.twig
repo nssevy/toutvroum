@@ -3,25 +3,12 @@
 	<head>
 		<meta charset="UTF-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<title>Toutvroum</title>
-		{# <link rel="stylesheet" href="style.css"> — CSS à venir (V1) #}
+		<meta name="theme-color" content="#0a0a0a">
+		<title>ToutVroum</title>
+		<link rel="stylesheet" href="style.css">
 	</head>
-	<body>
-		<div class="container">
-			<h1>Toutvroum 🛣️</h1>
-			<p class="subtitle">L'état des autoroutes IDF en temps réel</p>
-
-			<div class="boutons">
-				{% for autoroute in autoroutes %}
-					<button onclick="chercher('{{ autoroute }}')">
-						{{ autoroute == 'PERIPH' ? 'Périph' : autoroute }}
-					</button>
-				{% endfor %}
-			</div>
-
-			<div id="resultat" class="hidden"></div>
-		</div>
-
-		<script src="app.js"></script>
+	<body class="bg-fond text-texte">
+		<div id="app" class="mx-auto flex min-h-screen w-full max-w-[430px] flex-col bg-fond"></div>
+		<script type="module" src="app.js"></script>
 	</body>
 </html>

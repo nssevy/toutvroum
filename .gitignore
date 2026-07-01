@@ -2,3 +2,4 @@
 vendor/
 .claude
 var/
+node_modules/
